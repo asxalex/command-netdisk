@@ -105,9 +105,9 @@ class Interact():
         command = arg[0].lower()
         args = arg[1:]
 
-        if command == "upload":
+        if command == "push":
             return self.upload(args)
-        if command == "download":
+        if command == "pull":
             return self.download(args)
         if command == "ls":
             return self.ls(argvs);
@@ -149,9 +149,9 @@ def help():
     print """
 usage:
   upload:
-    netdisk upload filename
+    netdisk push filename
   download:
-    netdisk download filename
+    netdisk pull filename
   ls:
     netdisk ls filename
     """
