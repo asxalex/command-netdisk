@@ -1,0 +1,6 @@
+[qiniu]
+# this is a note
+domain = domain-name
+access_key = access_key_on_qiniu
+secret_key = private_key_on_qiniu
+bucket_name = bucket_name_on_qiniu

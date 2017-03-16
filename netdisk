@@ -1,0 +1,177 @@
+#! /usr/bin/python2
+# -*- coding: utf-8 -*-
+# vim:fenc=utf-8
+# flake8: noqa
+#
+# Copyright © 2017 alex <alex@localhost>
+#
+# Distributed under terms of the MIT license.
+
+from qiniu import Auth, put_file, etag, urlsafe_base64_encode
+from qiniu import BucketManager
+import qiniu.config
+import sys
+import os
+import requests
+import sqlite3
+import re
+import ConfigParser
+import getopt
+
+
+CREATE_INFO = "CREATE TABLE IF NOT EXISTS `localindex` (id integer primary key autoincrement, fname varchar(200), flag int default 1);"
+INSERT_INFO = "INSERT INTO `localindex` (fname) values (?);"
+SEARCH_INFO = "SELECT fname FROM `localindex` where flag = 1;"
+
+class QiNiu(object):
+    def __init__(self, bucket_name, domain, access_key, secret_key):
+        self.q = Auth(access_key, secret_key)
+        self.bucket_name = bucket_name
+        self.domain = domain
+        self.conn = sqlite3.connect("./local.db")
+        cursor = self.conn.cursor()
+        cursor.execute(CREATE_INFO)
+        self.conn.commit()
+
+    def config(self):
+        pass
+
+    ## flow regulation for one file
+    def upload(self, filename):
+        #上传到七牛后保存的文件名
+        key = filename.split("/")[-1]
+
+        #生成上传 Token，可以指定过期时间等
+        token = self.q.upload_token(self.bucket_name, key, 3600)
+
+        #要上传文件的本地路径
+        localfile = filename
+
+        try:
+            ret, info = put_file(token, key, localfile)
+        except Exception, e:
+            print "failed to upload file: ", e
+            print "did you get the keys right?"
+            return
+
+        cursor = self.conn.cursor()
+        cursor.execute(INSERT_INFO, (key, ))
+        self.conn.commit()
+
+    def download(self, fnames, target_dir="./"):
+        if type(fnames) == str:
+            f = {}
+            pattern = re.compile(fnames)
+            cursor = self.conn.cursor()
+            cursor.execute(SEARCH_INFO)
+            rows = cursor.fetchall()
+            for i in rows:
+                name = i[0]
+                if pattern.match(name):
+                    f[name] = 1;
+            filenames = f.keys()
+        else:
+            filenames = fnames;
+
+        for filename in filenames:
+            base_url = "http://%s/%s" % (self.domain.strip("/"), filename)
+            private_url = self.q.private_download_url(base_url)
+            print "downloading file %s..." % (filename)
+            try:
+                r = requests.get(private_url, timeout=3)
+                if r.status_code != 200:
+                    print "it returns status code with %d (%s)" % (r.status_code, r.reason)
+                    continue
+            except Exception, e:
+                print "get url(%s) error" % base_url
+                continue
+            local = target_dir.rstrip("/") + "/" + filename
+            fp = open(local, "w")
+            fp.write(r.content)
+            fp.close()
+
+    def get_info(self, filename):
+        bucket = BucketManager(self.q)
+        ret, info = bucket.stat(self.bucket_name, filename)
+        print info
+
+
+
+class Interact():
+    def __init__(self, bucket_name, domain, access_key, secret_key):
+        self.qi = QiNiu(bucket_name, domain, access_key, secret_key)
+        
+    def run(self, arg):
+        command = arg[0].lower()
+        args = arg[1:]
+
+        if command == "upload":
+            return self.upload(args)
+        if command == "download":
+            return self.download(args)
+        if command == "ls":
+            return self.ls(argvs);
+        return self.help();
+
+    def __arg(self, arglist, arg, result_list):
+        result = {}
+        opts, args = getopt.getopt(arglist, arg)
+        for op, value in opts:
+            for i in result_list:
+                if op == "-" + i:
+                    result[i] = value
+        return result
+
+
+    def upload(self, arg):
+        if len(arg) < 1:
+            help()
+            return
+        filename = arg[0]
+        print filename
+        self.qi.upload(filename)
+
+    def download(self, arg):
+        if len(arg) < 1:
+            help()
+            return
+        filename = arg[0]
+        print filename
+        self.qi.download(filename)
+
+    def ls(self, arg):
+        if len(arg) < 1:
+            filename = "*"
+        else:
+            filename = arg[0]
+
+def help():
+    print """
+usage:
+  upload:
+    netdisk upload filename
+  download:
+    netdisk download filename
+  ls:
+    netdisk ls filename
+    """
+
+if __name__ == "__main__":
+    config = ConfigParser.ConfigParser()
+    config.read("config")
+    try:
+        access_key = config.get("qiniu", "access_key")
+        secret_key = config.get("qiniu", "secret_key")
+        domain = config.get("qiniu", "domain")
+        bucket_name = config.get("qiniu", "bucket_name")
+    except Exception, e:
+        print "failed to load config:", e
+        sys.exit(-1)
+
+    if len(sys.argv) < 2:
+        help()
+        sys.exit(-1)
+
+    inter = Interact(bucket_name, domain, access_key, secret_key)
+    inter.run(sys.argv[1:])
+
